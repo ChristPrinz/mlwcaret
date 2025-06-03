@@ -1,0 +1,337 @@
+---
+title: "MLwCaret"
+output: html_notebook
+---
+
+In diesem Notebook können Sie anhand der Analyse und verschiedener Modellierungen im Bikesharing-Datensatz nachvollziehen, wie Sie caret-Funktionen beim ML in R einsetzen können.
+
+# Vorbereitungen
+## Clear workspace
+Löschen Sie die alte Umgebung, um in einem "neuen" R zu starten.
+```{r}
+rm(list=ls())
+```
+
+## Installieren von Packages
+Falls Sie die in diesem Notebook benötigten Packages noch nicht haben (und nur dann), werden diese von CRAN noch nachinstalliert.
+```{r}
+if (!require("ggplot2")) install.packages("ggplot2")
+if (!require("dplyr")) install.packages("dplyr") 
+if (!require("GGally")) install.packages("GGally") 
+if (!require("randomForest")) install.packages("randomForest")
+if (!require("caret")) install.packages("caret")
+if (!require("magrittr")) install.packages("magrittr")
+if (!require("coefplot")) install.packages("coefplot")
+
+```
+
+
+## Funktion für SRH Optik aufrufen
+Nur in der Demo-Version
+
+## Daten laden und vorbereiten
+Sie können die Daten aus dem Internet herunterladen, importieren und einem Preprocessing unterziehen. Wochentage, Arbeitstage, Datum und Wetterbedingungen sind folglich als passende Formate (Datum, Faktoren...) kodiert.
+```{r}
+library(dplyr)
+bikesharing <- read.csv("https://raw.githubusercontent.com/christophM/interpretable-ml-book/master/data/bike-sharing-daily.csv")
+bikesharing <- bikesharing %>%
+  mutate(
+    weekday_fct = factor(x = weekday,
+             levels = c(0,1,2,3,4,5,6),
+             labels = c("Sunday",
+                       "Monday",
+                       "Tuesday",
+                       "Wednesday",
+                       "Thursday",
+                       "Friday",
+                       "Saturday")))
+bikesharing <- bikesharing %>%
+    mutate(weathersit_fct = factor(x = weathersit,
+              levels = c(1, 2, 3),
+              labels = c("Good",
+                       "Clouds/Mist",
+                       "Rain/Snow/Storm")))
+bikesharing <- bikesharing %>%
+    mutate(season_fct = factor(x = season,
+              levels = c(1, 2, 3, 4),
+              labels = c("Spring",
+                       "Summer",
+                       "Fall",
+                       "Winter")))
+bikesharing$workingday <- as.factor(bikesharing$workingday)
+bikesharing$weekday <- as.factor(bikesharing$weekday)
+bikesharing$dteday <- as.Date(bikesharing$dteday)
+bikesharing$weekday_fct <- as.character(bikesharing$weekday_fct)
+```
+
+# Explorative Datenanalyse
+## Übersicht über den Datensatz
+Sehen Sie sich die ersten sechs Zeilen des Datensatzes an.
+```{r}
+head(bikesharing)
+```
+
+## Struktur
+Sehen Sie sich Struktur und Aufbau des Datensatzes an
+```{r}
+str(bikesharing)
+```
+
+## Statistische Zusammenfassung
+Erhalten Sie für jede Variable eine Zusammenfassung in Form deskriptiver Statistik
+```{r}
+summary(bikesharing)
+```
+
+## Pairs-Plot zur visuellen Übersicht
+Plotten Sie alle Variablen gegeneinander, um Verteilungen und Zusammenhänge bereits jetzt zu verstehen
+```{r fig.height = 10, fig.width = 10, fig.align = "center", warning=FALSE,message=FALSE}
+library(GGally)
+GGally::ggpairs(bikesharing[-c(2,17,18,19)])
+```
+Plotten Sie die Ausleihen gegen die Zeit, um den Verlauf genauer analysieren zu können.
+```{r}
+ggplot(filter(bikesharing,yr==1), mapping=aes(x=dteday,y=cnt)) +
+  geom_point()+
+  labs(title="Bikesharing over the year 2012",x="",y="Count (abs)")
+```
+
+
+
+
+# Model training
+## Lineares univariates Modell
+```{r}
+ggplot(bikesharing, mapping=aes(x=temp,y=cnt)) +
+  geom_point()+
+  geom_smooth(method="lm",col="#DF4807")+
+  labs(title="Bike Rentals",x="Temperature (norm.)",y="Count (abs)")
+```
+## Data Splitting
+```{r}
+set.seed(123)
+trainIndex <- createDataPartition(bikesharing$cnt, p = 0.8, list = FALSE)
+bikesharing_train <- bikesharing[trainIndex, ]
+bikesharing_test <- bikesharing[-trainIndex, ]
+```
+
+
+## 10 fache Cross Validation
+```{r}
+library(caret)
+library(randomForest)
+trainControl <- trainControl(method="repeatedcv", number=10, repeats=3)
+metric <- c("RMSE")
+```
+
+## Lineares multivariates Modell
+```{r}
+set.seed(7)
+fit.lm <- train(cnt ~ temp + hum + windspeed + factor(weekday_fct) + holiday,data=bikesharing_train, method="lm",metric=metric, preProc=c("center",
+"scale"), trControl=trainControl)
+```
+
+### Coefficient Plot
+```{r}
+library(coefplot)
+coefplot(fit.lm, col="#DF4807",intercept=F) +
+  labs(title="Multivariate Linear Model Bike Rentals")
+```
+
+## RF regression
+```{r}
+set.seed(7)
+fit.rf <- train(cnt ~ temp + workingday + hum + windspeed + weekday, data=bikesharing_train, method="rf", metric=metric, preProc=c("center",
+"scale"), trControl=trainControl)
+```
+
+### GLM regression
+```{r}
+set.seed(7)
+fit.glm <- train(cnt ~ temp + workingday + hum + windspeed + weekday, data=bikesharing_train, method="glm", metric=metric, preProc=c("center",
+"scale"), trControl=trainControl)
+```
+
+
+### SVM regression
+```{r}
+set.seed(7)
+fit.svm <- train(cnt ~ temp + workingday + hum + windspeed + weekday, data=bikesharing_train, method="svmRadial", metric=metric,
+preProc=c("center", "scale"), trControl=trainControl)
+```
+
+### CART regression
+```{r}
+set.seed(7)
+grid <- expand.grid(.cp=c(0, 0.05, 0.1))
+fit.cart <- train(cnt ~ temp + workingday + hum + windspeed + weekday, data=bikesharing_train, method="rpart", metric=metric, tuneGrid=grid,
+preProc=c("center", "scale"), trControl=trainControl)
+```
+
+### KNN regression
+```{r}
+set.seed(7)
+fit.knn <- train(cnt ~ temp + workingday + hum + windspeed + weekday, data=bikesharing_train, method="knn", metric=metric, preProc=c("center",
+"scale"), trControl=trainControl)
+```
+
+## Compare algorithms for regression based on cross validation results
+```{r}
+results1 <- resamples(list(LM=fit.lm, GLM=fit.glm, SVM=fit.svm,
+CART=fit.cart, KNN=fit.knn, RF=fit.rf))
+summary(results1)
+scales <- list(x=list(relation="free"), y=list(relation="free"))
+dotplot(results1,scales=scales)
+```
+
+## Model evaluation for classification based on cross validation results
+Predict the season based on temperatur, hum, windspeed and counts
+```{r}
+# prepare training scheme
+trainControl <- trainControl(method="repeatedcv", number=10, repeats=3)
+# CART
+set.seed(7)
+fit.cart <- train(season_fct~temp+cnt+hum+windspeed, data=bikesharing_train, method="rpart",
+trControl=trainControl)
+# LDA
+fit.lda <- train(season_fct~temp+cnt+hum+windspeed, data=bikesharing_train, method="lda", trControl=trainControl)
+# SVM
+fit.svm <- train(season_fct~temp+cnt+hum+windspeed, data=bikesharing_train, method="svmRadial",
+trControl=trainControl)
+# KNN
+fit.knn <- train(season_fct~temp+cnt+hum+windspeed, data=bikesharing_train, method="knn", trControl=trainControl)
+# Random Forest
+fit.rf <- train(season_fct~temp+cnt+hum+windspeed, data=bikesharing_train, method="rf", trControl=trainControl)
+# collect resamples
+results2 <- resamples(list(CART=fit.cart, LDA=fit.lda, SVM=fit.svm, KNN=fit.knn, RF=fit.rf))
+```
+
+```{r}
+# summarize differences between modes
+summary(results2)
+```
+
+```{r}
+# box and whisker plots to compare models
+scales <- list(x=list(relation="free"), y=list(relation="free"))
+bwplot(results2, scales=scales)
+```
+
+
+# Model testing with test data
+## Regression testing
+```{r}
+library(caret)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# --- Vorhersagen auf Testdaten ---
+pred.lm   <- predict(fit.lm,  newdata = bikesharing_test)
+pred.glm  <- predict(fit.glm, newdata = bikesharing_test)
+pred.rf   <- predict(fit.rf,  newdata = bikesharing_test)
+pred.svm  <- predict(fit.svm, newdata = bikesharing_test)
+pred.cart <- predict(fit.cart, newdata = bikesharing_test)
+pred.knn  <- predict(fit.knn, newdata = bikesharing_test)
+
+# --- Wahre Werte ---
+obs.reg <- bikesharing_test$cnt
+
+# --- Sicherstellen, dass alles numerisch ist ---
+obs.reg <- as.numeric(obs.reg)
+pred.lm <- as.numeric(pred.lm)
+pred.glm <- as.numeric(pred.glm)
+pred.rf <- as.numeric(pred.rf)
+pred.svm <- as.numeric(pred.svm)
+pred.cart <- as.numeric(pred.cart)
+pred.knn <- as.numeric(pred.knn)
+
+# --- Fehlermaße berechnen ---
+results_reg <- data.frame(
+  Modell = c("LM", "GLM", "RF", "SVM", "CART", "KNN"),
+  RMSE = c(
+    RMSE(pred.lm, obs.reg),
+    RMSE(pred.glm, obs.reg),
+    RMSE(pred.rf, obs.reg),
+    RMSE(pred.svm, obs.reg),
+    RMSE(pred.cart, obs.reg),
+    RMSE(pred.knn, obs.reg)
+  ),
+  Rsquared = c(
+    R2(pred.lm, obs.reg),
+    R2(pred.glm, obs.reg),
+    R2(pred.rf, obs.reg),
+    R2(pred.svm, obs.reg),
+    R2(pred.cart, obs.reg),
+    R2(pred.knn, obs.reg)
+  ),
+  MAE = c(
+    MAE(pred.lm, obs.reg),
+    MAE(pred.glm, obs.reg),
+    MAE(pred.rf, obs.reg),
+    MAE(pred.svm, obs.reg),
+    MAE(pred.cart, obs.reg),
+    MAE(pred.knn, obs.reg)
+  )
+)
+
+# --- Daten ins Long-Format bringen für ggplot ---
+results_reg_long <- pivot_longer(results_reg, -Modell, names_to = "Metrik", values_to = "Wert")
+
+# --- Visualisierung ---
+ggplot(results_reg_long, aes(x = reorder(Modell, Wert), y = Wert, fill = Metrik)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(~Metrik, scales = "free") +
+  labs(title = "Leistungsvergleich der Regressionsmodelle (Testdaten)",
+       x = "Modell", y = "Wert") +
+  coord_flip()
+```
+## Classification testing
+```{r}
+# --- Wahre Klassenlabels ---
+obs.class <- as.factor(bikesharing_test$season_fct)  # Absicherung: Zielvariable als Faktor
+
+# --- Vorhersagen auf Testdaten (sicher als Faktor) ---
+pred.cart <- as.factor(predict(fit.cart, newdata = bikesharing_test))
+pred.lda  <- as.factor(predict(fit.lda,  newdata = bikesharing_test))
+pred.svm  <- as.factor(predict(fit.svm,  newdata = bikesharing_test))
+pred.knn  <- as.factor(predict(fit.knn,  newdata = bikesharing_test))
+pred.rf   <- as.factor(predict(fit.rf,   newdata = bikesharing_test))
+
+# --- Metriken mit postResample ---
+results_class <- data.frame(
+  Modell = c("CART", "LDA", "SVM", "KNN", "RF"),
+  Accuracy = c(
+    postResample(pred.cart, obs.class)["Accuracy"],
+    postResample(pred.lda,  obs.class)["Accuracy"],
+    postResample(pred.svm,  obs.class)["Accuracy"],
+    postResample(pred.knn,  obs.class)["Accuracy"],
+    postResample(pred.rf,   obs.class)["Accuracy"]
+  ),
+  Kappa = c(
+    postResample(pred.cart, obs.class)["Kappa"],
+    postResample(pred.lda,  obs.class)["Kappa"],
+    postResample(pred.svm,  obs.class)["Kappa"],
+    postResample(pred.knn,  obs.class)["Kappa"],
+    postResample(pred.rf,   obs.class)["Kappa"]
+  )
+)
+
+# --- Daten ins Long-Format für ggplot ---
+results_class_long <- pivot_longer(results_class, -Modell, names_to = "Metrik", values_to = "Wert")
+
+# --- Visualisierung ---
+ggplot(results_class_long, aes(x = reorder(Modell, Wert), y = Wert, fill = Metrik)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(~Metrik, scales = "free") +
+  labs(title = "Leistungsvergleich der Klassifikationsmodelle (Testdaten)",
+       x = "Modell", y = "Wert") +
+  theme_minimal() +
+  coord_flip()
+```
+
+
+Sie sind am Ende des Notebooks angelangt.
+```{r}
+print("Done")
+```
